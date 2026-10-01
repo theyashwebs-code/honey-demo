@@ -1,80 +1,251 @@
-/* Hidden admin area for the frontend-only MVP.
-   IMPORTANT: this is not secure authentication. Credentials and data live in browser JavaScript/localStorage.
-   Real authentication, shared orders, backups and multi-device operation require a backend such as Spring Boot + MySQL + cloud storage. */
+/* MADHURAVANA Pure Honey — shared frontend application.
+   Shared stock is synced through Supabase REST. LocalStorage remains the offline/cache layer.
+   IMPORTANT: never put a Supabase service_role key in this file. Use the public anon key only. */
 
-const ADMIN_CONFIG = { username:"admin", password:"ChangeThisPassword" }; // CHANGE THESE BEFORE CLIENT DELIVERY.
-const ADMIN_STATUSES = ["Order Placed","Processing","Shipped","Out for Delivery","Delivered","Cancelled"];
+const BUSINESS_CONFIG = {
+  brandName: "MADHURAVANA Pure Honey",
+  whatsappNumber: "917092722605", // Replace with business WhatsApp number, digits only, country code included.
+  instagramUrl: "https://instagram.com/xxxxx", // Replace with real Instagram URL.
+  phone: "7092722605",
+  email: "yashwantchatti@gmail.com",
+  address: "Hyderabad, Telangana"
+};
 
-function adminOpenLogin(){
-  const root=document.getElementById("modal-root");if(!root)return;
-  root.innerHTML=`<div class="modal-backdrop" id="admin-login-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="admin-title">
-    <div class="modal-head"><div><span class="eyebrow">Private area</span><h2 id="admin-title">Admin Login</h2><p>This frontend-only login is not secure authentication.</p></div><button class="close-modal" id="close-admin">×</button></div>
-    <form id="admin-login-form"><label>Admin ID<input name="username" autocomplete="username" required></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button class="btn btn-primary" type="submit">Login</button></form>
-  </div></div>`;
-  document.getElementById("close-admin").onclick=closeModal;
-  document.getElementById("admin-login-backdrop").addEventListener("click",e=>{if(e.target.id==="admin-login-backdrop")closeModal()});
-  document.getElementById("admin-login-form").onsubmit=e=>{e.preventDefault();const d=Object.fromEntries(new FormData(e.currentTarget));if(d.username===ADMIN_CONFIG.username&&d.password===ADMIN_CONFIG.password){safeSave(KEYS.session,{loggedIn:true,at:Date.now()});closeModal();location.hash="admin";renderAdmin()}else showToast("Invalid admin ID or password.","warn")};
+const CLOUD_CONFIG = {
+  // Create a Supabase project, then paste these two public values here.
+  // SUPABASE_ANON_KEY is safe to expose only when Row Level Security is configured correctly.
+  url: "YOUR_SUPABASE_PROJECT_URL",
+  anonKey: "YOUR_SUPABASE_ANON_KEY",
+  table: "madhuravana_products",
+  refreshMs: 5000
+};
+
+const DEFAULT_PRODUCTS = [
+  {id:"MH001",name:"MADHURAVANA Pure Honey",weight:"250g",price:299,description:"A beautiful everyday jar of naturally golden honey, ideal for morning rituals, tea and recipes.",inStock:true,amazonUrl:""},
+  {id:"MH002",name:"MADHURAVANA Pure Honey",weight:"500g",price:499,description:"Our balanced everyday size for homes that love keeping a little more golden goodness close.",inStock:true,amazonUrl:""},
+  {id:"MH003",name:"MADHURAVANA Pure Honey",weight:"1kg",price:899,description:"A generous family jar made for regular use, gifting and those who simply love honey.",inStock:true,amazonUrl:""}
+];
+
+const KEYS = {
+  cart:"madhuravana_cart", products:"madhuravana_products", online:"madhuravana_online_orders",
+  offline:"madhuravana_offline_orders", session:"madhuravana_admin_session", lastOrder:"madhuravana_last_order",
+  settings:"madhuravana_settings", counter:"madhuravana_order_counter"
+};
+
+function safeParse(key,fallback){try{const raw=localStorage.getItem(key);return raw===null?fallback:JSON.parse(raw)}catch(e){console.warn("localStorage read failed",key,e);return fallback}}
+function safeSave(key,value){try{localStorage.setItem(key,JSON.stringify(value));return true}catch(e){showToast("Browser storage is unavailable. Please check storage permissions.","warn");return false}}
+function cloudConfigured(){return /^https:\/\/[^\s]+$/.test(CLOUD_CONFIG.url) && !CLOUD_CONFIG.url.includes("YOUR_") && !!CLOUD_CONFIG.anonKey && !CLOUD_CONFIG.anonKey.includes("YOUR_")}
+function cloudHeaders(extra={}){return {apikey:CLOUD_CONFIG.anonKey,Authorization:`Bearer ${CLOUD_CONFIG.anonKey}`,Accept:"application/json",...extra}}
+function getProducts(){const p=safeParse(KEYS.products,null);if(!Array.isArray(p)){safeSave(KEYS.products,DEFAULT_PRODUCTS);return structuredClone(DEFAULT_PRODUCTS)}return p}
+function saveProducts(v){return safeSave(KEYS.products,v)}
+async function loadSharedProducts(options={}){
+  if(!cloudConfigured()) return getProducts();
+  try{
+    const r=await fetch(`${CLOUD_CONFIG.url}/rest/v1/${CLOUD_CONFIG.table}?select=id,name,weight,price,description,in_stock,amazon_url&order=id`,{headers:cloudHeaders()});
+    if(!r.ok) throw new Error(`Cloud stock request failed (${r.status})`);
+    const rows=await r.json();
+    if(!Array.isArray(rows) || !rows.length) return getProducts();
+    const products=rows.map(x=>({id:x.id,name:x.name,weight:x.weight,price:Number(x.price),description:x.description||"",inStock:x.in_stock!==false,amazonUrl:x.amazon_url||""}));
+    const before=JSON.stringify(getProducts().map(p=>({id:p.id,inStock:!!p.inStock,price:p.price,name:p.name,weight:p.weight})));
+    const after=JSON.stringify(products.map(p=>({id:p.id,inStock:!!p.inStock,price:p.price,name:p.name,weight:p.weight})));
+    saveProducts(products);
+    if(options.render!==false && before!==after) refreshCurrentProductPage();
+    return products;
+  }catch(err){console.warn("Shared stock sync failed:",err);return getProducts()}
 }
-function closeModal(){const r=document.getElementById("modal-root");if(r)r.innerHTML=""}
-function isAdmin(){return !!safeParse(KEYS.session,null)?.loggedIn}
-function adminLogout(){localStorage.removeItem(KEYS.session);location.hash="";location.reload()}
-function renderAdmin(){
-  if(!isAdmin()){adminOpenLogin();return}
-  const body=document.body;body.innerHTML=`<div class="admin-shell"><aside class="admin-sidebar"><div class="admin-logo">MADHURAVANA<small>BUSINESS ADMIN</small></div><nav class="admin-nav" id="admin-nav">
-    ${["dashboard","online","offline","products","customers","settings"].map((x,i)=>`<button data-admin-view="${x}" class="${i===0?"active":""}">${x==="dashboard"?"Dashboard":x==="online"?"Online Orders":x==="offline"?"Offline Orders":x==="products"?"Products / Stock":x==="customers"?"Customers":"Settings"}</button>`).join("")}
-    <button id="admin-logout" style="margin-top:18px;color:#e5a398">Log out</button></nav></aside><main class="admin-main"><div class="admin-top"><div><span class="eyebrow">Madhuravana business console</span><h1 id="admin-title-main">Dashboard</h1></div><a class="mini-btn" href="index.html">View Website ↗</a></div><div id="admin-content"></div></main></div>`;
-  document.getElementById("admin-logout").onclick=adminLogout;
-  document.querySelectorAll("[data-admin-view]").forEach(b=>b.onclick=()=>{document.querySelectorAll("[data-admin-view]").forEach(x=>x.classList.remove("active"));b.classList.add("active");renderAdminView(b.dataset.adminView)});
-  renderAdminView("dashboard");
+async function setSharedProductStock(id,inStock){
+  const products=getProducts();
+  const local=products.find(p=>p.id===id);
+  if(local){local.inStock=inStock;saveProducts(products)}
+  if(!cloudConfigured()){showToast("Cloud stock is not configured yet.","warn");return false}
+  try{
+    const r=await fetch(`${CLOUD_CONFIG.url}/rest/v1/${CLOUD_CONFIG.table}?id=eq.${encodeURIComponent(id)}`,{method:"PATCH",headers:cloudHeaders({"Content-Type":"application/json","Prefer":"return=representation"}),body:JSON.stringify({in_stock:inStock,updated_at:new Date().toISOString()})});
+    if(!r.ok) throw new Error(`Cloud stock update failed (${r.status})`);
+    return true;
+  }catch(err){console.error(err);showToast("Could not update shared stock. Check Supabase setup.","warn");await loadSharedProducts({render:false});return false}
 }
-function adminOrders(){return [...getOnlineOrders(),...getOfflineOrders()]}
-function statCards(){const o=adminOrders();const count=s=>o.filter(x=>x.status===s).length;return `<div class="admin-grid">${[
-  ["Total Orders",o.length],["Online Orders",getOnlineOrders().length],["Offline Orders",getOfflineOrders().length],["Order Placed",count("Order Placed")],["Processing",count("Processing")],["Shipped",count("Shipped")],["Out for Delivery",count("Out for Delivery")],["Delivered",count("Delivered")],["Cancelled",count("Cancelled")],["Total COD Value",money(o.reduce((s,x)=>s+Number(x.total||0),0))]
-].map(([a,b])=>`<div class="stat-card"><span>${a}</span><strong>${b}</strong></div>`).join("")}</div>`}
-function renderAdminView(view){
-  const content=document.getElementById("admin-content"),title=document.getElementById("admin-title-main");if(!content)return;
-  const titles={dashboard:"Dashboard",online:"Online Orders",offline:"Offline Orders",products:"Products / Stock",customers:"Customers",settings:"Settings"};title.textContent=titles[view];
-  if(view==="dashboard"){content.innerHTML=statCards()+`<div class="admin-section"><h2>Recent orders</h2>${orderTable(adminOrders().slice(0,8))}</div>`;return}
-  if(view==="online"){content.innerHTML=ordersView("ONLINE",getOnlineOrders());return}
-  if(view==="offline"){content.innerHTML=ordersView("OFFLINE",getOfflineOrders());return}
-  if(view==="products"){content.innerHTML=productsView();return}
-  if(view==="customers"){content.innerHTML=customersView();return}
-  if(view==="settings"){content.innerHTML=settingsView();bindSettings();return}
+function refreshCurrentProductPage(){
+  const current=page();
+  if(current==="home") { renderHome(); return; }
+  if(current==="shop") { renderShop(); return; }
+  if(current==="product") { renderProduct(); return; }
+  if(current==="cart") { renderCart(); updateCartCount(); return; }
+  if(current==="checkout") { renderCheckout(); }
 }
-function ordersView(type,orders){return `<div class="admin-section"><div class="admin-toolbar"><input id="order-search" placeholder="Search order ID, name or phone"><select id="order-filter"><option>All</option>${ADMIN_STATUSES.map(s=>`<option>${s}</option>`).join("")}</select></div><div id="orders-table">${orderTable(orders)}</div></div>`}
-function statusClass(s){return s.toLowerCase().replaceAll(" ","-")}
-function orderTable(orders){if(!orders.length)return `<div class="empty-state"><h2>No orders yet.</h2><p>Orders created through the website will appear here.</p></div>`;return `<table class="admin-table"><thead><tr><th>Order</th><th>Customer</th><th>Type</th><th>Total</th><th>Status</th><th>Date</th><th></th></tr></thead><tbody>${orders.map(o=>`<tr><td><strong>${esc(o.id)}</strong></td><td>${esc(o.customerName)}<br><span class="muted">${esc(o.phone)}</span></td><td>${esc(o.orderType)}</td><td>${money(o.total)}</td><td><span class="admin-badge ${statusClass(o.status)}">${esc(o.status)}</span></td><td>${esc(o.orderDate)}</td><td><button class="mini-btn" data-order-view="${esc(o.id)}">Details</button></td></tr>`).join("")}</tbody></table>`}
-function bindOrderTable(){
-  document.querySelectorAll("[data-order-view]").forEach(b=>b.onclick=()=>showOrderModal(b.dataset.orderView));
-  document.getElementById("order-search")?.addEventListener("input",filterOrders);document.getElementById("order-filter")?.addEventListener("change",filterOrders);
+function startSharedStockSync(){
+  if(!cloudConfigured()) return;
+  loadSharedProducts({render:true});
+  setInterval(()=>loadSharedProducts({render:true}),CLOUD_CONFIG.refreshMs);
+  window.addEventListener("focus",()=>loadSharedProducts({render:true}));
 }
-function filterOrders(){
-  const q=(document.getElementById("order-search")?.value||"").toLowerCase(),f=document.getElementById("order-filter")?.value||"All";
-  const type=document.getElementById("admin-title-main").textContent==="Online Orders"?"ONLINE":"OFFLINE";
-  let orders=type==="ONLINE"?getOnlineOrders():getOfflineOrders();orders=orders.filter(o=>(f==="All"||o.status===f)&&(!q||`${o.id} ${o.customerName} ${o.phone}`.toLowerCase().includes(q)));document.getElementById("orders-table").innerHTML=orderTable(orders);bindOrderTable();
+
+function getCart(){return safeParse(KEYS.cart,[])}
+function saveCart(v){return safeSave(KEYS.cart,v)}
+function getOnlineOrders(){return safeParse(KEYS.online,[])}
+function saveOnlineOrders(v){return safeSave(KEYS.online,v)}
+function getOfflineOrders(){return safeParse(KEYS.offline,[])}
+function saveOfflineOrders(v){return safeSave(KEYS.offline,v)}
+function getSettings(){return {...BUSINESS_CONFIG,...safeParse(KEYS.settings,{})}}
+function saveSettings(v){return safeSave(KEYS.settings,v)}
+function money(n){return new Intl.NumberFormat("en-IN",{style:"currency",currency:"INR",maximumFractionDigits:0}).format(n)}
+function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]))}
+function page(){return document.body.dataset.page||""}
+
+function showToast(message,type=""){const root=document.getElementById("toast-root");if(!root)return;const el=document.createElement("div");el.className=`toast ${type}`;el.textContent=message;root.appendChild(el);setTimeout(()=>el.remove(),3200)}
+function miniJar(){return `<div class="mini-jar" aria-hidden="true"><div class="mini-lid"></div><div class="mini-body"></div><div class="mini-label"><small>MADHURAVANA</small>PURE<br>HONEY</div></div>`}
+
+function renderHeader(){
+  const root=document.getElementById("site-header"); if(!root)return;
+  root.innerHTML=`<header class="site-header"><div class="container nav">
+    <a class="brand" href="index.html">MADHURAVANA<small>Pure Honey</small></a>
+    <button class="menu-btn" id="menu-btn" aria-label="Open menu" aria-expanded="false">☰</button>
+    <nav class="nav-links" id="nav-links" aria-label="Primary navigation">
+      <a href="index.html">Home</a><a href="shop.html">Shop</a><a href="index.html#about">About</a><a href="index.html#contact">Contact</a>
+      <a data-instagram href="#" target="_blank" rel="noopener">Instagram</a><a data-whatsapp href="#">WhatsApp</a>
+      <a class="cart-link" href="cart.html">Cart <span class="cart-count" id="cart-count">0</span></a>
+    </nav>
+  </div></header>`;
+  const btn=document.getElementById("menu-btn"), nav=document.getElementById("nav-links");
+  btn?.addEventListener("click",()=>{const open=nav.classList.toggle("open");btn.setAttribute("aria-expanded",String(open));});
+  document.querySelectorAll("[data-instagram]").forEach(a=>a.href=getSettings().instagramUrl);
+  document.querySelectorAll("[data-whatsapp]").forEach(a=>a.href=whatsappUrl("Hello MADHURAVANA, I have a question about your honey products."));
+  updateCartCount();
 }
-function showOrderModal(id){
-  const o=adminOrders().find(x=>x.id===id);if(!o)return;const root=document.getElementById("modal-root")||document.body;let modal=document.createElement("div");modal.id="admin-order-modal";modal.className="modal-backdrop";modal.innerHTML=`<div class="modal" style="width:min(620px,100%)"><div class="modal-head"><div><span class="eyebrow">${esc(o.orderType)} ORDER</span><h2>${esc(o.id)}</h2></div><button class="close-modal" id="order-close">×</button></div>
-  <div class="summary-row"><span>Customer</span><strong>${esc(o.customerName)}</strong></div><div class="summary-row"><span>Phone</span><span>${esc(o.phone)}</span></div><div class="summary-row"><span>Products</span><span>${o.products.map(p=>`${esc(p.name)} ${esc(p.weight)} × ${p.quantity}`).join("<br>")}</span></div><div class="summary-row"><span>Total</span><strong>${money(o.total)}</strong></div><div class="summary-row"><span>Payment</span><span>${esc(o.paymentMethod)}</span></div><div class="summary-row"><span>Address</span><span>${esc(o.address.street)}, ${esc(o.address.city)}, ${esc(o.address.state)} - ${esc(o.address.pincode)}</span></div><div class="summary-row"><span>Date / Time</span><span>${esc(o.orderDate)} · ${esc(o.orderTime)}</span></div>
-  <label style="display:block;margin-top:18px;font-size:.78rem;font-weight:800">Update Status<select id="modal-status" style="display:block;width:100%;margin-top:6px;padding:12px;border:1px solid var(--line);border-radius:10px">${ADMIN_STATUSES.map(s=>`<option ${s===o.status?"selected":""}>${s}</option>`).join("")}</select></label><div class="product-actions"><button class="btn btn-primary" id="modal-save-status">Update Status</button><button class="btn btn-ghost" id="modal-print">Print Order</button></div></div>`;
-  root.appendChild(modal);modal.querySelector("#order-close").onclick=()=>modal.remove();modal.addEventListener("click",e=>{if(e.target===modal)modal.remove()});
-  modal.querySelector("#modal-save-status").onclick=()=>{updateOrderStatus(o.id,modal.querySelector("#modal-status").value);modal.remove();const view=document.getElementById("admin-title-main").textContent.toLowerCase().split(" ")[0];renderAdminView(view==="online"?"online":view==="offline"?"offline":"dashboard");showToast("✓ Order status updated")};
-  modal.querySelector("#modal-print").onclick=()=>printOrder(o);
+function renderFooter(){
+  const root=document.getElementById("site-footer");if(!root)return;
+  root.innerHTML=`<footer class="site-footer"><div class="container footer-grid">
+    <div><div class="footer-brand">MADHURAVANA<small>PURE HONEY</small></div><p style="margin-top:15px">Natural sweetness, thoughtfully presented. Premium honey for everyday rituals and special moments.</p></div>
+    <div class="footer-col"><h4>Explore</h4><a href="index.html">Home</a><a href="shop.html">Shop</a><a href="index.html#about">About</a><a href="index.html#contact">Contact</a></div>
+    <div class="footer-col"><h4>Connect</h4><a data-instagram target="_blank" rel="noopener">Instagram ↗</a><a data-whatsapp>WhatsApp ↗</a><p>${esc(getSettings().email)}</p><p>${esc(getSettings().phone)}</p></div>
+  </div><div class="container footer-bottom"><span>© ${new Date().getFullYear()} MADHURAVANA Pure Honey</span><span>Made with natural warmth.</span></div></footer>`;
+  document.querySelectorAll("[data-instagram]").forEach(a=>a.href=getSettings().instagramUrl);
+  document.querySelectorAll("[data-whatsapp]").forEach(a=>a.href=whatsappUrl("Hello MADHURAVANA, I have a question about your honey products."));
 }
-function updateOrderStatus(id,status){let on=getOnlineOrders(),idx=on.findIndex(o=>o.id===id);if(idx>=0){on[idx].status=status;saveOnlineOrders(on);return}let off=getOfflineOrders();idx=off.findIndex(o=>o.id===id);if(idx>=0){off[idx].status=status;saveOfflineOrders(off)}}
-function printOrder(o){const w=window.open("","_blank","width=800,height=900");if(!w){showToast("Please allow popups to print the order.","warn");return}w.document.write(`<html><head><title>${esc(o.id)}</title><style>body{font:14px Arial;padding:40px;color:#2b1b12}h1{font:700 28px Georgia}.line{padding:9px 0;border-bottom:1px solid #ddd}small{color:#777}</style></head><body><h1>MADHURAVANA Pure Honey</h1><p><strong>${esc(o.id)}</strong> · ${esc(o.orderType)}</p><div class="line"><strong>Customer:</strong> ${esc(o.customerName)} · ${esc(o.phone)}</div><div class="line"><strong>Products:</strong><br>${o.products.map(p=>`${esc(p.name)} - ${esc(p.weight)} × ${p.quantity} — ${money(p.price*p.quantity)}`).join("<br>")}</div><div class="line"><strong>Total:</strong> ${money(o.total)}</div><div class="line"><strong>Payment:</strong> ${esc(o.paymentMethod)}</div><div class="line"><strong>Address:</strong> ${esc(o.address.street)}, ${esc(o.address.city)}, ${esc(o.address.state)} - ${esc(o.address.pincode)}</div><div class="line"><strong>Status:</strong> ${esc(o.status)}</div><p><small>Printed ${new Date().toLocaleString("en-IN")}</small></p><script>window.onload=()=>window.print()</script></body></html>`);w.document.close()}
-function productsView(){const p=getProducts();return `<div class="admin-section"><div class="admin-toolbar"><strong>PRODUCTS</strong></div><table class="admin-table"><thead><tr><th>Product</th><th>Weight</th><th>Price</th><th>Stock</th><th>Amazon</th><th>Actions</th></tr></thead><tbody>${p.map(x=>`<tr><td>${esc(x.name)}</td><td>${esc(x.weight)}</td><td>${money(x.price)}</td><td><span class="admin-badge ${x.inStock?"delivered":"cancelled"}">${x.inStock?"IN STOCK":"OUT OF STOCK"}</span></td><td>${x.amazonUrl?"Configured":"—"}</td><td class="admin-actions"><button class="mini-btn" data-stock="${x.id}">${x.inStock?"Mark Out of Stock":"Mark In Stock"}</button><button class="mini-btn" data-edit-product="${x.id}">Edit</button></td></tr>`).join("")}</tbody></table></div><div class="admin-section"><h2>Developer note</h2><p class="admin-note">Products are stored in localStorage. Replace the default placeholder product data in <code>script.js</code> before launch, or use the controls here for basic stock and price changes.</p></div>`}
-function bindProducts(){document.querySelectorAll("[data-stock]").forEach(b=>b.onclick=()=>{const p=getProducts();const x=p.find(i=>i.id===b.dataset.stock);if(x){x.inStock=!x.inStock;saveProducts(p);renderAdminView("products");showToast("✓ Stock updated")}});document.querySelectorAll("[data-edit-product]").forEach(b=>b.onclick=()=>editProduct(b.dataset.editProduct))}
-function editProduct(id){const p=getProducts(),x=p.find(i=>i.id===id);if(!x)return;const root=document.getElementById("modal-root")||document.body;const m=document.createElement("div");m.className="modal-backdrop";m.innerHTML=`<div class="modal"><div class="modal-head"><h2>Edit Product</h2><button class="close-modal">×</button></div><form class="admin-form" id="edit-p"><label class="full">Name<input name="name" value="${esc(x.name)}" required></label><label>Weight<input name="weight" value="${esc(x.weight)}" required></label><label>Price<input name="price" type="number" min="0" value="${x.price}" required></label><label class="full">Description<textarea name="description">${esc(x.description)}</textarea></label><label class="full">Amazon URL<input name="amazonUrl" value="${esc(x.amazonUrl||"")}"></label><button class="btn btn-primary" type="submit">Save Product</button></form></div>`;root.appendChild(m);m.querySelector(".close-modal").onclick=()=>m.remove();m.querySelector("form").onsubmit=e=>{e.preventDefault();const d=Object.fromEntries(new FormData(e.currentTarget));x.name=d.name.trim();x.weight=d.weight.trim();x.price=Number(d.price);x.description=d.description.trim();x.amazonUrl=d.amazonUrl.trim();saveProducts(p);m.remove();renderAdminView("products");showToast("✓ Product updated")}}
-function customersView(){const map=new Map();for(const o of adminOrders()){const key=o.phone||o.customerName;if(!map.has(key))map.set(key,{name:o.customerName,phone:o.phone,count:0,total:0,last:o.orderDate,type:new Set()});const c=map.get(key);c.count++;c.total+=Number(o.total||0);c.last=o.orderDate;c.type.add(o.orderType)}const cs=[...map.values()];return `<div class="admin-section"><h2>Customers</h2><table class="admin-table"><thead><tr><th>Name</th><th>Phone</th><th>Orders</th><th>Total Purchase</th><th>Last Order</th><th>Type</th></tr></thead><tbody>${cs.length?cs.map(c=>`<tr><td>${esc(c.name)}</td><td>${esc(c.phone)}</td><td>${c.count}</td><td>${money(c.total)}</td><td>${esc(c.last)}</td><td>${[...c.type].join(" / ")}</td></tr>`).join(""):`<tr><td colspan="6">No customers yet.</td></tr>`}</tbody></table></div>`}
-function settingsView(){const s=getSettings();return `<div class="settings-grid"><div class="admin-section"><h2>Business Configuration</h2><form class="admin-form" id="settings-form"><label class="full">Brand Name<input name="brandName" value="${esc(s.brandName)}"></label><label class="full">WhatsApp Number<input name="whatsappNumber" value="${esc(s.whatsappNumber)}"></label><label class="full">Instagram URL<input name="instagramUrl" value="${esc(s.instagramUrl)}"></label><label>Phone<input name="phone" value="${esc(s.phone)}"></label><label>Email<input name="email" value="${esc(s.email)}"></label><label class="full">Address<input name="address" value="${esc(s.address)}"></label><button class="btn btn-primary" type="submit">Save Settings</button></form></div>
-<div class="admin-section"><h2>Backup</h2><p>Because this is a frontend-only MVP, browser storage is not a cloud backup. Export regularly.</p><div class="admin-actions"><button class="mini-btn" id="export-data">Export Data</button><label class="mini-btn" style="cursor:pointer">Import Data<input id="import-data" type="file" accept=".json,application/json" hidden></label></div><p class="admin-note" style="margin-top:15px">Export includes products, online orders, offline orders and settings.</p></div>
-<div class="admin-section danger-zone"><h2>Danger Zone</h2><div class="admin-actions"><button class="mini-btn danger" id="clear-orders">Clear Orders</button><button class="mini-btn danger" id="reset-products">Reset Products</button><button class="mini-btn danger" id="clear-all">Clear All Local Data</button></div></div>
-<div class="admin-section"><h2>Frontend-only limitation</h2><p class="admin-note">localStorage is browser-specific. Multiple devices do not share orders, WhatsApp messages cannot be automatically received by this site, and this admin login is not secure authentication. For production multi-device operations, move data/authentication behind a backend such as Spring Boot + MySQL + cloud hosting.</p></div></div>`}
-function bindSettings(){document.getElementById("settings-form")?.addEventListener("submit",e=>{e.preventDefault();saveSettings(Object.fromEntries(new FormData(e.currentTarget)));showToast("✓ Settings saved");renderHeader();renderFooter()});document.getElementById("export-data")?.addEventListener("click",exportData);document.getElementById("import-data")?.addEventListener("change",importData);document.getElementById("clear-orders")?.addEventListener("click",()=>{if(confirm("Delete ALL online and offline orders? This cannot be undone unless you exported a backup.")){saveOnlineOrders([]);saveOfflineOrders([]);renderAdminView("settings");showToast("Orders cleared")}});document.getElementById("reset-products")?.addEventListener("click",()=>{if(confirm("Reset all products to the default catalog?")){saveProducts(DEFAULT_PRODUCTS);renderAdminView("products");showToast("Products reset")}});document.getElementById("clear-all")?.addEventListener("click",()=>{if(confirm("Clear ALL MADHURAVANA local data? Export a backup first.")){Object.values(KEYS).forEach(k=>localStorage.removeItem(k));localStorage.removeItem("madhuravana_offline_counter");alert("All local data cleared. The page will reload.");location.href="index.html"}})}
-function exportData(){const data={exportedAt:new Date().toISOString(),products:getProducts(),onlineOrders:getOnlineOrders(),offlineOrders:getOfflineOrders(),settings:getSettings()};const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"}),a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`madhuravana-backup-${new Date().toISOString().slice(0,10)}.json`;a.click();URL.revokeObjectURL(a.href);showToast("✓ Backup exported")}
-function importData(e){const file=e.target.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>{try{const d=JSON.parse(reader.result);if(!Array.isArray(d.products)||!Array.isArray(d.onlineOrders)||!Array.isArray(d.offlineOrders))throw new Error("Invalid backup");if(confirm("Import this backup and replace current browser data?")){saveProducts(d.products);saveOnlineOrders(d.onlineOrders);saveOfflineOrders(d.offlineOrders);if(d.settings)saveSettings(d.settings);renderAdminView("dashboard");showToast("✓ Backup imported")}}catch(err){showToast("Invalid backup file.","warn")}};reader.readAsText(file)}
-window.addEventListener("open-admin-login",()=>{if(location.hash==="#admin"&&isAdmin())renderAdmin();else adminOpenLogin()});
-window.addEventListener("hashchange",()=>{if(location.hash==="#admin")renderAdmin()});
-if(location.hash==="#admin")window.addEventListener("DOMContentLoaded",()=>{setTimeout(renderAdmin,50)});
-window.addEventListener("click",e=>{if(e.target.matches("[data-admin-view]"))setTimeout(()=>{const v=e.target.dataset.adminView;if(v==="online"||v==="offline")bindOrderTable();if(v==="products")bindProducts()},0)});
+function whatsappUrl(message){const n=getSettings().whatsappNumber.replace(/\D/g,"");return n&&n.length>=8?`https://wa.me/${n}?text=${encodeURIComponent(message)}`:"#"}
+function updateCartCount(){const el=document.getElementById("cart-count");if(el)el.textContent=getCart().reduce((a,i)=>a+i.quantity,0)}
+
+function productCard(p){
+  const out=!p.inStock;
+  return `<article class="product-card reveal visible">
+    <a href="product.html?id=${encodeURIComponent(p.id)}" class="product-visual" aria-label="View ${esc(p.name)} ${esc(p.weight)}">${miniJar()}</a>
+    <div class="product-content"><div class="product-meta"><span class="eyebrow">${esc(p.weight)}</span><span class="stock-badge ${out?"out":""}">${out?"Out of Stock":"In Stock"}</span></div>
+    <h3><a href="product.html?id=${encodeURIComponent(p.id)}">${esc(p.name)}</a></h3><p>${esc(p.description)}</p>
+    <div class="product-meta"><span class="price">${money(p.price)}</span></div>
+    <div class="product-actions"><a class="btn btn-ghost" href="product.html?id=${encodeURIComponent(p.id)}">View</a><button class="btn ${out?"btn-ghost":"btn-primary"} add-btn" data-add="${esc(p.id)}" ${out?"disabled":""}>${out?"Unavailable":"Add to Cart"}</button></div></div></article>`;
+}
+function renderProductGrid(target,products){const el=document.getElementById(target);if(!el)return;el.innerHTML=products.map(productCard).join("")||`<div class="empty-state"><h2>No products found.</h2><p>Please check the product configuration.</p></div>`}
+function attachAddButtons(){document.querySelectorAll("[data-add]").forEach(btn=>btn.addEventListener("click",()=>addToCart(btn.dataset.add,1)))}
+function addToCart(id, quantity = 1) {
+  const p = getProducts().find(x => x.id === id);
+
+  if (!p) {
+    showToast("Product not found.", "warn");
+    return;
+  }
+
+  if (!p.inStock) {
+    showToast("This product is currently out of stock.", "warn");
+    return;
+  }
+
+  const cart = getCart();
+  const item = cart.find(x => x.id === id);
+
+  if (item) {
+    item.quantity += quantity;
+  } else {
+    cart.push({
+      id: id,
+      quantity: quantity
+    });
+  }
+
+  saveCart(cart);
+  updateCartCount();
+
+  showToast(
+    `✓ ${p.name} ${p.weight} added to cart`,
+    ""
+  );
+}
+function changeCart(id,delta){const cart=getCart();const item=cart.find(x=>x.id===id);if(!item)return;item.quantity+=delta;if(item.quantity<=0){saveCart(cart.filter(x=>x.id!==id));showToast("✓ Product removed")}else saveCart(cart);renderCart();updateCartCount()}
+function removeCart(id){saveCart(getCart().filter(x=>x.id!==id));renderCart();updateCartCount();showToast("✓ Product removed")}
+function cartDetailed(){const products=getProducts();return getCart().map(i=>{const p=products.find(x=>x.id===i.id);return p?{...p,quantity:i.quantity}:null}).filter(Boolean)}
+function cartTotal(){return cartDetailed().reduce((s,i)=>s+i.price*i.quantity,0)}
+
+function renderCart(){
+  const box=document.getElementById("cart-items"),summary=document.getElementById("cart-summary");if(!box||!summary)return;
+  const items=cartDetailed();
+  if(!items.length){box.innerHTML=`<div class="empty-state"><h2>Your cart is waiting.</h2><p>Choose a jar of MADHURAVANA Pure Honey and it will appear here.</p><a class="btn btn-primary" href="shop.html">Shop Honey</a></div>`;summary.innerHTML="";return}
+  box.innerHTML=items.map(i=>`<div class="cart-item"><div class="cart-thumb">${miniJar()}</div><div><h3>${esc(i.name)}</h3><div class="muted">${esc(i.weight)} · ${money(i.price)}</div><div class="cart-controls"><button class="circle-btn" data-minus="${i.id}" aria-label="Decrease quantity">−</button><strong>${i.quantity}</strong><button class="circle-btn" data-plus="${i.id}" aria-label="Increase quantity">+</button><button class="remove-btn" data-remove="${i.id}">Remove</button></div></div><div class="price">${money(i.price*i.quantity)}</div></div>`).join("");
+  const total=cartTotal();
+  summary.innerHTML=`<h3>Order summary</h3>${items.map(i=>`<div class="summary-row"><span>${esc(i.weight)} × ${i.quantity}</span><strong>${money(i.price*i.quantity)}</strong></div>`).join("")}<div class="summary-total"><span>Total</span><span>${money(total)}</span></div><p class="form-note" style="margin-top:18px">Cash on Delivery · WhatsApp order preparation</p><a class="btn btn-primary btn-block" href="checkout.html">Proceed to Checkout</a><button class="btn btn-ghost btn-block" id="empty-cart" style="margin-top:8px">Empty Cart</button>`;
+  box.querySelectorAll("[data-minus]").forEach(b=>b.onclick=()=>changeCart(b.dataset.minus,-1));box.querySelectorAll("[data-plus]").forEach(b=>b.onclick=()=>changeCart(b.dataset.plus,1));box.querySelectorAll("[data-remove]").forEach(b=>b.onclick=()=>removeCart(b.dataset.remove));document.getElementById("empty-cart").onclick=()=>{if(confirm("Empty your entire cart?")){saveCart([]);renderCart();updateCartCount();}};
+}
+
+function renderCheckout(){
+  const summary=document.getElementById("checkout-summary");if(!summary)return;
+  const items=cartDetailed();if(!items.length){summary.innerHTML=`<div class="empty-state"><h2>Cart is empty.</h2><a class="btn btn-primary" href="shop.html">Shop Honey</a></div>`;document.getElementById("checkout-form").style.display="none";return}
+  summary.innerHTML=`<h3>Order summary</h3>${items.map(i=>`<div class="summary-row"><span>${esc(i.name)} · ${esc(i.weight)} × ${i.quantity}</span><strong>${money(i.price*i.quantity)}</strong></div>`).join("")}<div class="summary-total"><span>Total</span><span>${money(cartTotal())}</span></div>`;
+  document.getElementById("checkout-form").addEventListener("submit",submitCheckout);
+}
+function submitCheckout(e){
+  e.preventDefault();const f=e.currentTarget;const data=Object.fromEntries(new FormData(f).entries());
+  if(!data.name.trim())return showToast("Please enter your full name.","warn");
+  if(!/^[0-9]{10}$/.test(data.phone.replace(/\D/g,"")))return showToast("Please enter a valid 10-digit mobile number.","warn");
+  if(!data.address.trim()||!data.city.trim()||!data.state.trim())return showToast("Please complete the delivery address.","warn");
+  if(!/^[0-9]{6}$/.test(data.pincode.trim()))return showToast("Please enter a valid 6-digit pincode.","warn");
+  const items=cartDetailed();if(!items.length)return showToast("Your cart is empty.","warn");
+  const products=getProducts();for(const i of items){const live=products.find(p=>p.id===i.id);if(!live?.inStock)return showToast(`${i.name} (${i.weight}) is currently out of stock.`,"warn")}
+  const id=generateOnlineId();const now=new Date();const order={id,customerName:data.name.trim(),phone:data.phone.replace(/\D/g,""),products:items.map(i=>({id:i.id,name:i.name,weight:i.weight,quantity:i.quantity,price:i.price})),total:cartTotal(),paymentMethod:"Cash on Delivery",address:{street:data.address.trim(),city:data.city.trim(),state:data.state.trim(),pincode:data.pincode.trim()},orderType:"ONLINE",orderDate:now.toLocaleDateString("en-IN"),orderTime:now.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"}),status:"Order Placed",createdAt:now.toISOString()};
+  // Customer checkout does NOT create an admin order automatically.
+  // The customer prepares the WhatsApp message and the business owner manually
+  // enters the order into Admin > Online Orders after receiving it.
+  const message=buildWhatsAppMessage(order);
+  const url=whatsappUrl(message);
+  if(url==="#"){
+    showToast("Add the business WhatsApp number in BUSINESS_CONFIG first.","warn");
+    return;
+  }
+
+  safeSave(KEYS.lastOrder,{...order,whatsappUrl:url});
+  saveCart([]);
+  updateCartCount();
+  window.location.href=`order-success.html?order=${encodeURIComponent(order.id)}`;
+}
+function generateOnlineId(){const d=new Date();const date=`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`;const n=(safeParse(KEYS.counter,0)||0)+1;safeSave(KEYS.counter,n);return `MH${date}${String(n).padStart(3,"0")}`}
+function generateOfflineId(){const n=(safeParse("madhuravana_offline_counter",1000)||1000)+1;safeSave("madhuravana_offline_counter",n);return `OFF-MH-${n}`}
+function buildWhatsAppMessage(o){return `NEW MADHURAVANA HONEY ORDER\n\nOrder ID: ${o.id}\n\nCUSTOMER DETAILS\n\nName: ${o.customerName}\nPhone: ${o.phone}\n\nORDER DETAILS\n\n${o.products.map(p=>`${p.name} - ${p.weight}\nQuantity: ${p.quantity}\nPrice: ${money(p.price*p.quantity)}`).join("\n\n")}\n\nTOTAL: ${money(o.total)}\n\nPAYMENT METHOD:\nCash on Delivery\n\nDELIVERY ADDRESS:\n${o.address.street}\n${o.address.city}\n${o.address.state}\n${o.address.pincode}`}
+
+function renderProduct(){
+  const root=document.getElementById("product-detail");if(!root)return;
+  const id=new URLSearchParams(location.search).get("id");const p=getProducts().find(x=>x.id===id);
+  if(!p){root.innerHTML=`<div class="empty-state"><h2>Product not found.</h2><a class="btn btn-primary" href="shop.html">Back to Shop</a></div>`;return}
+  root.innerHTML=`<div class="product-detail"><div class="detail-visual">${miniJar()}</div><div class="detail-copy"><span class="eyebrow">${esc(p.weight)}</span><h1>${esc(p.name)}</h1><div class="price">${money(p.price)}</div><p class="description">${esc(p.description)}</p><div class="availability ${p.inStock?"ok":"no"}">${p.inStock?"✓ In Stock":"× Currently Out of Stock"}</div>${p.inStock?`<div class="qty-control"><button id="qty-minus" aria-label="Decrease quantity">−</button><span id="qty">1</span><button id="qty-plus" aria-label="Increase quantity">+</button></div><div class="product-actions"><button class="btn btn-primary" id="detail-add">Add to Cart</button><a class="btn btn-ghost" href="${whatsappUrl(`Hello MADHURAVANA, I would like to order ${p.name} - ${p.weight}.`)}" target="_blank" rel="noopener">Order via WhatsApp ↗</a></div>`:`<p class="form-note">Currently unavailable. Please check back after stock is updated.</p>`}${p.amazonUrl?`<a class="text-link" style="display:inline-block;margin-top:20px" href="${esc(p.amazonUrl)}" target="_blank" rel="noopener">Buy on Amazon ↗</a>`:""}</div></div>`;
+  if(p.inStock){let q=1;document.getElementById("qty-minus").onclick=()=>{q=Math.max(1,q-1);document.getElementById("qty").textContent=q};document.getElementById("qty-plus").onclick=()=>{q=Math.min(20,q+1);document.getElementById("qty").textContent=q};document.getElementById("detail-add").onclick=()=>addToCart(p.id,q)}
+}
+
+function renderHome(){const target=document.getElementById("featured-products");if(target){renderProductGrid("featured-products",getProducts());attachAddButtons()}}
+function renderShop(){const all=getProducts();const sort=document.getElementById("shop-sort");const paint=()=>{let p=[...all];if(sort.value==="low")p.sort((a,b)=>a.price-b.price);if(sort.value==="high")p.sort((a,b)=>b.price-a.price);renderProductGrid("shop-products",p);attachAddButtons();document.getElementById("shop-count").textContent=`${p.length} product${p.length!==1?"s":""}`};sort?.addEventListener("change",paint);paint()}
+
+function renderSuccess(){
+  const data=safeParse(KEYS.lastOrder,null);const params=new URLSearchParams(location.search);const id=params.get("order");const o=data&&data.id===id?data:data;
+  if(!o)return;
+  document.getElementById("success-order-card").innerHTML=`<strong>${esc(o.id)}</strong><div class="summary-row"><span>Customer</span><span>${esc(o.customerName)}</span></div><div class="summary-row"><span>Items</span><span>${o.products.reduce((s,p)=>s+p.quantity,0)}</span></div><div class="summary-total"><span>Total</span><span>${money(o.total)}</span></div>`;
+  const a=document.getElementById("success-whatsapp");a.href=o.whatsappUrl||whatsappUrl(buildWhatsAppMessage(o));
+}
+
+function revealSetup(){const els=document.querySelectorAll(".reveal");if(!("IntersectionObserver" in window)){els.forEach(e=>e.classList.add("visible"));return}const io=new IntersectionObserver(entries=>entries.forEach(x=>x.isIntersecting&&x.target.classList.add("visible")),{threshold:.08});els.forEach(e=>io.observe(e))}
+function keyboardAdmin(){document.addEventListener("keydown",e=>{if(e.ctrlKey&&e.shiftKey&&e.key.toLowerCase()==="a"){e.preventDefault();window.dispatchEvent(new CustomEvent("open-admin-login"))}})}
+
+document.addEventListener("DOMContentLoaded",()=>{
+  getProducts();renderHeader();renderFooter();keyboardAdmin();revealSetup();
+  if(page()==="home")renderHome();
+  if(page()==="shop")renderShop();
+  if(page()==="product")renderProduct();
+  if(page()==="cart")renderCart();
+  if(page()==="checkout")renderCheckout();
+  if(page()==="success")renderSuccess();
+  startSharedStockSync();
+});
+window.MADHURAVANA={BUSINESS_CONFIG,CLOUD_CONFIG,DEFAULT_PRODUCTS,KEYS,getProducts,saveProducts,loadSharedProducts,setSharedProductStock,getCart,saveCart,getOnlineOrders,saveOnlineOrders,getOfflineOrders,saveOfflineOrders,getSettings,saveSettings,money,showToast,whatsappUrl,buildWhatsAppMessage,updateCartCount};
