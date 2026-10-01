@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Checkout | MADHURAVANA Pure Honey</title><link rel="stylesheet" href="style.css">
+</head>
+<body data-page="checkout">
+  <div id="site-header"></div>
+  <main>
+    <section class="page-hero small"><div class="container center"><span class="eyebrow">Cash on Delivery</span><h1>Complete your order.</h1><p>Your order message will be prepared for WhatsApp.</p></div></section>
+    <section class="section"><div class="container checkout-layout">
+      <form id="checkout-form" class="form-card" novalidate>
+        <div class="form-heading"><span class="eyebrow">Delivery details</span><h2>Where should we send it?</h2></div>
+        <div class="form-grid">
+          <label>Full Name<input name="name" autocomplete="name" required maxlength="80"></label>
+          <label>Mobile Number<input name="phone" inputmode="numeric" autocomplete="tel" required maxlength="15"></label>
+          <label class="full">House / Street Address<input name="address" autocomplete="street-address" required maxlength="180"></label>
+          <label>City<input name="city" autocomplete="address-level2" required maxlength="60"></label>
+          <label>State<input name="state" autocomplete="address-level1" required maxlength="60"></label>
+          <label>Pincode<input name="pincode" inputmode="numeric" autocomplete="postal-code" required maxlength="6"></label>
+        </div>
+        <div class="payment-box"><span class="payment-check">✓</span><div><strong>Cash on Delivery</strong><p>Pay when your honey arrives. No online payment is collected here.</p></div></div>
+        <p class="form-note">Your order is saved locally on this browser and prepared as a WhatsApp message. It is only submitted to the business after you press Send in WhatsApp.</p>
+        <button class="btn btn-primary btn-block" type="submit">Place Order via WhatsApp <span>↗</span></button>
+      </form>
+      <aside id="checkout-summary" class="summary-card"></aside>
+    </div></section>
+  </main>
+  <div id="site-footer"></div><div id="modal-root"></div><div id="toast-root"></div>
+  <script src="script.js"></script><script src="admin.js"></script>
+</body>
+</html>
