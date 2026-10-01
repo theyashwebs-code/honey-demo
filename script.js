@@ -5,7 +5,7 @@
 const BUSINESS_CONFIG = {
   brandName: "MADHURAVANA Pure Honey",
   whatsappNumber: "917092722605", // Replace with business WhatsApp number, digits only, country code included.
-  instagramUrl: "https://instagram.com/xxxxx", // Replace with real Instagram URL.
+  instagramUrl: "https://www.instagram.com/madhuravanahoney/",// Replace with real Instagram URL.
   phone: "7092722605",
   email: "yashwantchatti@gmail.com",
   address: "Hyderabad, Telangana"
