@@ -101,7 +101,7 @@ function renderHeader(){
     <button class="menu-btn" id="menu-btn" aria-label="Open menu" aria-expanded="false">☰</button>
     <nav class="nav-links" id="nav-links" aria-label="Primary navigation">
       <a href="index.html">Home</a><a href="shop.html">Shop</a><a href="index.html#about">About</a><a href="index.html#contact">Contact</a>
-      <a data-instagram href="#" target="_blank" rel="noopener">Instagram</a><a data-whatsapp href="#">WhatsApp</a>
+      <a data-instagram href="https://www.instagram.com/madhuravanahoney/" target="_blank" rel="noopener noreferrer">Instagram</a><a data-whatsapp href="#">WhatsApp</a>
       <a class="cart-link" href="cart.html">Cart <span class="cart-count" id="cart-count">0</span></a>
     </nav>
   </div></header>`;
