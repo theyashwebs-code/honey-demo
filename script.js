@@ -1,5 +1,6 @@
 /* MADHURAVANA Pure Honey — shared frontend application.
-   Frontend-only MVP: localStorage is browser-specific and is not a secure/cloud database. */
+   Shared stock is synced through Supabase REST. LocalStorage remains the offline/cache layer.
+   IMPORTANT: never put a Supabase service_role key in this file. Use the public anon key only. */
 
 const BUSINESS_CONFIG = {
   brandName: "MADHURAVANA Pure Honey",
@@ -8,6 +9,15 @@ const BUSINESS_CONFIG = {
   phone: "7092722605",
   email: "yashwantchatti@gmail.com",
   address: "Hyderabad, Telangana"
+};
+
+const CLOUD_CONFIG = {
+  // Create a Supabase project, then paste these two public values here.
+  // SUPABASE_ANON_KEY is safe to expose only when Row Level Security is configured correctly.
+  url: "YOUR_SUPABASE_PROJECT_URL",
+  anonKey: "YOUR_SUPABASE_ANON_KEY",
+  table: "madhuravana_products",
+  refreshMs: 5000
 };
 
 const DEFAULT_PRODUCTS = [
@@ -24,8 +34,51 @@ const KEYS = {
 
 function safeParse(key,fallback){try{const raw=localStorage.getItem(key);return raw===null?fallback:JSON.parse(raw)}catch(e){console.warn("localStorage read failed",key,e);return fallback}}
 function safeSave(key,value){try{localStorage.setItem(key,JSON.stringify(value));return true}catch(e){showToast("Browser storage is unavailable. Please check storage permissions.","warn");return false}}
+function cloudConfigured(){return /^https:\/\/[^\s]+$/.test(CLOUD_CONFIG.url) && !CLOUD_CONFIG.url.includes("YOUR_") && !!CLOUD_CONFIG.anonKey && !CLOUD_CONFIG.anonKey.includes("YOUR_")}
+function cloudHeaders(extra={}){return {apikey:CLOUD_CONFIG.anonKey,Authorization:`Bearer ${CLOUD_CONFIG.anonKey}`,Accept:"application/json",...extra}}
 function getProducts(){const p=safeParse(KEYS.products,null);if(!Array.isArray(p)){safeSave(KEYS.products,DEFAULT_PRODUCTS);return structuredClone(DEFAULT_PRODUCTS)}return p}
 function saveProducts(v){return safeSave(KEYS.products,v)}
+async function loadSharedProducts(options={}){
+  if(!cloudConfigured()) return getProducts();
+  try{
+    const r=await fetch(`${CLOUD_CONFIG.url}/rest/v1/${CLOUD_CONFIG.table}?select=id,name,weight,price,description,in_stock,amazon_url&order=id`,{headers:cloudHeaders()});
+    if(!r.ok) throw new Error(`Cloud stock request failed (${r.status})`);
+    const rows=await r.json();
+    if(!Array.isArray(rows) || !rows.length) return getProducts();
+    const products=rows.map(x=>({id:x.id,name:x.name,weight:x.weight,price:Number(x.price),description:x.description||"",inStock:x.in_stock!==false,amazonUrl:x.amazon_url||""}));
+    const before=JSON.stringify(getProducts().map(p=>({id:p.id,inStock:!!p.inStock,price:p.price,name:p.name,weight:p.weight})));
+    const after=JSON.stringify(products.map(p=>({id:p.id,inStock:!!p.inStock,price:p.price,name:p.name,weight:p.weight})));
+    saveProducts(products);
+    if(options.render!==false && before!==after) refreshCurrentProductPage();
+    return products;
+  }catch(err){console.warn("Shared stock sync failed:",err);return getProducts()}
+}
+async function setSharedProductStock(id,inStock){
+  const products=getProducts();
+  const local=products.find(p=>p.id===id);
+  if(local){local.inStock=inStock;saveProducts(products)}
+  if(!cloudConfigured()){showToast("Cloud stock is not configured yet.","warn");return false}
+  try{
+    const r=await fetch(`${CLOUD_CONFIG.url}/rest/v1/${CLOUD_CONFIG.table}?id=eq.${encodeURIComponent(id)}`,{method:"PATCH",headers:cloudHeaders({"Content-Type":"application/json","Prefer":"return=representation"}),body:JSON.stringify({in_stock:inStock,updated_at:new Date().toISOString()})});
+    if(!r.ok) throw new Error(`Cloud stock update failed (${r.status})`);
+    return true;
+  }catch(err){console.error(err);showToast("Could not update shared stock. Check Supabase setup.","warn");await loadSharedProducts({render:false});return false}
+}
+function refreshCurrentProductPage(){
+  const current=page();
+  if(current==="home") { renderHome(); return; }
+  if(current==="shop") { renderShop(); return; }
+  if(current==="product") { renderProduct(); return; }
+  if(current==="cart") { renderCart(); updateCartCount(); return; }
+  if(current==="checkout") { renderCheckout(); }
+}
+function startSharedStockSync(){
+  if(!cloudConfigured()) return;
+  loadSharedProducts({render:true});
+  setInterval(()=>loadSharedProducts({render:true}),CLOUD_CONFIG.refreshMs);
+  window.addEventListener("focus",()=>loadSharedProducts({render:true}));
+}
+
 function getCart(){return safeParse(KEYS.cart,[])}
 function saveCart(v){return safeSave(KEYS.cart,v)}
 function getOnlineOrders(){return safeParse(KEYS.online,[])}
@@ -110,109 +163,10 @@ function addToCart(id, quantity = 1) {
   saveCart(cart);
   updateCartCount();
 
-  showAddedToCartModal(p, quantity);
-}
-function showAddedToCartModal(product, quantity = 1) {
-  const root = document.getElementById("modal-root");
-
-  if (!root) {
-    showToast(`✓ ${product.name} ${product.weight} added to cart`);
-    return;
-  }
-
-  root.innerHTML = `
-    <div class="cart-modal-overlay" id="cart-modal-overlay">
-      <div class="cart-added-modal" role="dialog" aria-modal="true" aria-labelledby="cart-added-title">
-
-        <button
-          class="cart-modal-close"
-          id="cart-modal-close"
-          aria-label="Close"
-        >×</button>
-
-        <div class="cart-success-icon">✓</div>
-
-        <div class="cart-modal-content">
-
-          <span class="eyebrow">Added to your cart</span>
-
-          <h2 id="cart-added-title">
-            Product Added Successfully
-          </h2>
-
-          <div class="cart-modal-product">
-
-            <div class="cart-modal-jar">
-              ${miniJar()}
-            </div>
-
-            <div class="cart-modal-product-info">
-              <h3>${esc(product.name)}</h3>
-
-              <p>${esc(product.weight)}</p>
-
-              <div class="cart-modal-price">
-                ${money(product.price)}
-              </div>
-
-              <span class="cart-modal-quantity">
-                Quantity: ${quantity}
-              </span>
-            </div>
-
-          </div>
-
-          <div class="cart-modal-actions">
-
-            <a
-              href="cart.html"
-              class="btn btn-primary cart-view-btn"
-            >
-              View Cart →
-            </a>
-
-            <button
-              type="button"
-              class="btn btn-ghost cart-continue-btn"
-              id="cart-continue-shopping"
-            >
-              Continue Shopping
-            </button>
-
-          </div>
-
-        </div>
-      </div>
-    </div>
-  `;
-
-  const overlay = document.getElementById("cart-modal-overlay");
-  const closeButton = document.getElementById("cart-modal-close");
-  const continueButton = document.getElementById("cart-continue-shopping");
-
-  const closeModal = () => {
-    overlay.classList.add("closing");
-
-    setTimeout(() => {
-      root.innerHTML = "";
-    }, 220);
-  };
-
-  closeButton?.addEventListener("click", closeModal);
-  continueButton?.addEventListener("click", closeModal);
-
-  overlay?.addEventListener("click", (e) => {
-    if (e.target === overlay) {
-      closeModal();
-    }
-  });
-
-  document.addEventListener("keydown", function escHandler(e) {
-    if (e.key === "Escape") {
-      closeModal();
-      document.removeEventListener("keydown", escHandler);
-    }
-  });
+  showToast(
+    `✓ ${p.name} ${p.weight} added to cart`,
+    ""
+  );
 }
 function changeCart(id,delta){const cart=getCart();const item=cart.find(x=>x.id===id);if(!item)return;item.quantity+=delta;if(item.quantity<=0){saveCart(cart.filter(x=>x.id!==id));showToast("✓ Product removed")}else saveCart(cart);renderCart();updateCartCount()}
 function removeCart(id){saveCart(getCart().filter(x=>x.id!==id));renderCart();updateCartCount();showToast("✓ Product removed")}
@@ -244,9 +198,19 @@ function submitCheckout(e){
   const items=cartDetailed();if(!items.length)return showToast("Your cart is empty.","warn");
   const products=getProducts();for(const i of items){const live=products.find(p=>p.id===i.id);if(!live?.inStock)return showToast(`${i.name} (${i.weight}) is currently out of stock.`,"warn")}
   const id=generateOnlineId();const now=new Date();const order={id,customerName:data.name.trim(),phone:data.phone.replace(/\D/g,""),products:items.map(i=>({id:i.id,name:i.name,weight:i.weight,quantity:i.quantity,price:i.price})),total:cartTotal(),paymentMethod:"Cash on Delivery",address:{street:data.address.trim(),city:data.city.trim(),state:data.state.trim(),pincode:data.pincode.trim()},orderType:"ONLINE",orderDate:now.toLocaleDateString("en-IN"),orderTime:now.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"}),status:"Order Placed",createdAt:now.toISOString()};
-  const orders=getOnlineOrders();orders.unshift(order);if(!saveOnlineOrders(orders))return;
-  const message=buildWhatsAppMessage(order);const url=whatsappUrl(message);if(url==="#"){showToast("Add the business WhatsApp number in BUSINESS_CONFIG first.","warn");return}
-  safeSave(KEYS.lastOrder,{...order,whatsappUrl:url});saveCart([]);updateCartCount();
+  // Customer checkout does NOT create an admin order automatically.
+  // The customer prepares the WhatsApp message and the business owner manually
+  // enters the order into Admin > Online Orders after receiving it.
+  const message=buildWhatsAppMessage(order);
+  const url=whatsappUrl(message);
+  if(url==="#"){
+    showToast("Add the business WhatsApp number in BUSINESS_CONFIG first.","warn");
+    return;
+  }
+
+  safeSave(KEYS.lastOrder,{...order,whatsappUrl:url});
+  saveCart([]);
+  updateCartCount();
   window.location.href=`order-success.html?order=${encodeURIComponent(order.id)}`;
 }
 function generateOnlineId(){const d=new Date();const date=`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`;const n=(safeParse(KEYS.counter,0)||0)+1;safeSave(KEYS.counter,n);return `MH${date}${String(n).padStart(3,"0")}`}
@@ -282,5 +246,6 @@ document.addEventListener("DOMContentLoaded",()=>{
   if(page()==="cart")renderCart();
   if(page()==="checkout")renderCheckout();
   if(page()==="success")renderSuccess();
+  startSharedStockSync();
 });
-window.MADHURAVANA={BUSINESS_CONFIG,DEFAULT_PRODUCTS,KEYS,getProducts,saveProducts,getCart,saveCart,getOnlineOrders,saveOnlineOrders,getOfflineOrders,saveOfflineOrders,getSettings,saveSettings,money,showToast,whatsappUrl,buildWhatsAppMessage,updateCartCount};
+window.MADHURAVANA={BUSINESS_CONFIG,CLOUD_CONFIG,DEFAULT_PRODUCTS,KEYS,getProducts,saveProducts,loadSharedProducts,setSharedProductStock,getCart,saveCart,getOnlineOrders,saveOnlineOrders,getOfflineOrders,saveOfflineOrders,getSettings,saveSettings,money,showToast,whatsappUrl,buildWhatsAppMessage,updateCartCount};
